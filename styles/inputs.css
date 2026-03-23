@@ -1,0 +1,56 @@
+/* Global input styling for consistent rounded, smooth inputs throughout the app */
+.input-base {
+  width: 100%;
+  padding: 12px 16px;
+  border-radius: 16px;
+  border: 1px solid #e5e7eb;
+  background-color: white;
+  color: #111827;
+  font-size: 16px;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+}
+
+.input-base:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1), 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+}
+
+.input-base:hover {
+  border-color: #d1d5db;
+}
+
+.input-base::placeholder {
+  color: #6b7280;
+}
+
+/* Dark mode styles */
+.dark .input-base {
+  background-color: #1f2937;
+  color: #f9fafb;
+  border-color: #374151;
+}
+
+.dark .input-base:focus {
+  border-color: #3b82f6;
+}
+
+.dark .input-base:hover {
+  border-color: #4b5563;
+}
+
+.dark .input-base::placeholder {
+  color: #9ca3af;
+}
+
+/* For textareas */
+.textarea-base {
+  min-height: 100px;
+  resize: none;
+}
+
+/* For search inputs */
+.input-search {
+  padding-left: 40px;
+}

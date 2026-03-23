@@ -1,0 +1,15 @@
+Hey! Can I tell you something that drives everyone crazy? Mean, median, and mode. I know, I know — sounds boring, but stick with me.
+
+Alright! So imagine you just got your math test back. You're looking at all these numbers and thinking... what do I even DO with these? Well, the mean is just your average. Super simple. Add up all the scores, divide by how many kids took the test, and there you go.
+
+But! And this is important... sometimes that average is kinda lying to you. Like, what if one kid gets a hundred and literally everyone else gets like seventies? That one perfect score is gonna make the average look way better than it really is. See the problem?
+
+That's when median comes in to save the day. It's just the middle number. Line everybody up, find the kid standing right in the middle, and that's your median. It doesn't care about that one superstar or that one kid who had a bad day. It just shows you what's normal.
+
+Now mode... oh my gosh, mode is the easiest thing ever. It's literally just whatever number shows up the most. If five people all got eighty-three? Guess what? Eighty-three is your mode. Done!
+
+And here's the cool part. Each one tells you a totally different story. It's like having three different witnesses to the same event. The mean gives you the big picture, the median tells you what's typical, and the mode shows you what's happening most often.
+
+Think about it! If you're the teacher, you need all three. The mean tells you "how'd my class do overall?" The median says "how's my average student doing?" And the mode whispers "hey... most of my kids are struggling right here."
+
+See? Not so bad right? Three different ways to understand the same exact numbers, and each one has its own special job. You got this!

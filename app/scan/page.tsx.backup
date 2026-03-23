@@ -1,0 +1,544 @@
+'use client'
+
+import { useState, useRef, useCallback, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
+import { BottomNavigation } from '@/components/BottomNavigation'
+import { documentScanner } from '@/lib/documentScanner'
+import { PremiumBackground, TierBadge } from '@/components/ui/PremiumUI'
+import { LoadingScreen } from '@/components/LoadingScreen'
+import {
+  Camera,
+  Upload,
+  Send,
+  Image as ImageIcon,
+  FileText,
+  Zap,
+  CheckCircle,
+  ArrowRight,
+  Sparkles,
+  Search,
+  BookOpen,
+  Brain,
+  Loader2,
+  RefreshCw,
+  Download,
+  Wand2,
+  X,
+  Circle
+} from 'lucide-react'
+
+interface TutorResponse {
+  whatThisIsAbout: string
+  stepByStepExplanation: string
+  keyConcepts: string[]
+  quickCheckQuestion: string
+}
+
+interface TutorAction {
+  id: string
+  title: string
+  description: string
+  icon: string
+  prompt: string
+}
+
+export default function ScanPage() {
+  const [uploadedImage, setUploadedImage] = useState<string | null>(null)
+  const [processedImage, setProcessedImage] = useState<string | null>(null)
+  const [isProcessing, setIsProcessing] = useState(false)
+  const [extractedText, setExtractedText] = useState<string>('')
+  const [isCameraActive, setIsCameraActive] = useState(false)
+  const [tutorResponse, setTutorResponse] = useState<TutorResponse | null>(null)
+  const [isGeneratingTutorResponse, setIsGeneratingTutorResponse] = useState(false)
+  const [selectedAction, setSelectedAction] = useState<TutorAction | null>(null)
+  const [showActionOptions, setShowActionOptions] = useState(false)
+
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const router = useRouter()
+
+  const startCamera = async () => {
+    try {
+      setIsCameraActive(true)
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' }
+      })
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream
+      }
+    } catch (err) {
+      console.error("Camera access denied:", err)
+      setIsCameraActive(false)
+      alert("Could not access camera. Please check permissions.")
+    }
+  }
+
+  const stopCamera = () => {
+    if (videoRef.current?.srcObject) {
+      const stream = videoRef.current.srcObject as MediaStream
+      stream.getTracks().forEach(track => track.stop())
+    }
+    setIsCameraActive(false)
+  }
+
+  const capturePhoto = () => {
+    if (videoRef.current && canvasRef.current) {
+      const video = videoRef.current
+      const canvas = canvasRef.current
+      canvas.width = video.videoWidth
+      canvas.height = video.videoHeight
+      const ctx = canvas.getContext('2d')
+      if (ctx) {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+        const dataUrl = canvas.toDataURL('image/jpeg')
+        setUploadedImage(dataUrl)
+        stopCamera()
+      }
+    }
+  }
+
+  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (file) {
+      const reader = new FileReader()
+      reader.onload = (e) => {
+        setUploadedImage(e.target?.result as string)
+        setProcessedImage(null)
+        setExtractedText('')
+      }
+      reader.readAsDataURL(file)
+    }
+  }
+
+  const handleClearDigitalScan = async () => {
+    if (!uploadedImage) return
+    setIsProcessing(true)
+    try {
+      await new Promise(resolve => setTimeout(resolve, 2000))
+      setProcessedImage(uploadedImage)
+    } catch (error) {
+      console.error('Enhancement failed:', error)
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  const handleExtractText = async () => {
+    if (!uploadedImage) return
+    setIsProcessing(true)
+    try {
+      console.log('🔍 Starting text extraction from image...')
+      
+      // Convert data URL back to File for the scanner
+      const response = await fetch(uploadedImage)
+      const blob = await response.blob()
+      const file = new File([blob], 'scanned-image.jpg', { type: 'image/jpeg' })
+      
+      const scanResult = await documentScanner.scanDocument(file)
+      
+      if (scanResult.confidence < 60) {
+        console.warn('⚠️ Low confidence scan:', scanResult.confidence)
+        setExtractedText(`⚠️ **Low Quality Scan** (${Math.round(scanResult.confidence)}% confidence)\n\n${scanResult.text}\n\n💡 **Tip:** Try using a clearer image or better lighting for better results.`)
+      } else {
+        console.log('✅ Text extraction successful:', scanResult.confidence)
+        setExtractedText(scanResult.text)
+      }
+    } catch (error) {
+      console.error('❌ Text extraction failed:', error)
+      setExtractedText(`❌ **Text Extraction Failed**\n\n${error instanceof Error ? error.message : 'Unknown error'}\n\n💡 **Tips:**\n• Ensure the image is clear and well-lit\n• Make sure text is readable and not blurry\n• Try cropping the image to focus on the text area`)
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  const getTutorActions = (): TutorAction[] => {
+    if (!extractedText) return []
+    
+    // Analyze the extracted text to determine relevant actions
+    const text = extractedText.toLowerCase()
+    const actions: TutorAction[] = []
+    
+    // Always include general explanation
+    actions.push({
+      id: 'explain',
+      title: 'Explain This Concept',
+      description: 'Get a detailed explanation of what this is about',
+      icon: '📚',
+      prompt: `Explain this concept in detail: ${extractedText}`
+    })
+    
+    // Check if it contains math problems
+    if (text.match(/\d+.*[+\-×÷=]|solve|calculate|find|equation|variable/)) {
+      actions.push({
+        id: 'solve',
+        title: 'Solve Step by Step',
+        description: 'Guided help to solve this problem step by step',
+        icon: '🔢',
+        prompt: `Help me solve this problem step by step with guidance: ${extractedText}`
+      })
+    }
+    
+    // Check if it contains questions
+    if (text.match(/\?|what|how|why|when|where|who|which|explain|describe/)) {
+      actions.push({
+        id: 'answer',
+        title: 'Answer Questions',
+        description: 'Get help answering the questions in this text',
+        icon: '❓',
+        prompt: `Help me answer these questions: ${extractedText}`
+      })
+    }
+    
+    // Check if it's a definition or concept
+    if (text.match(/define|definition|meaning|is a|refers to|means|concept/)) {
+      actions.push({
+        id: 'understand',
+        title: 'Deep Understanding',
+        description: 'Explore this concept with examples and connections',
+        icon: '🧠',
+        prompt: `Help me deeply understand this concept with examples: ${extractedText}`
+      })
+    }
+    
+    // Check for science/technical content
+    if (text.match(/science|biology|chemistry|physics|experiment|hypothesis|theory|formula/)) {
+      actions.push({
+        id: 'science',
+        title: 'Science Help',
+        description: 'Scientific explanation and real-world connections',
+        icon: '🔬',
+        prompt: `Explain this science topic with real-world examples: ${extractedText}`
+      })
+    }
+    
+    // Always include practice option
+    actions.push({
+      id: 'practice',
+      title: 'Practice Problems',
+      description: 'Generate similar problems to practice',
+      icon: '✏️',
+      prompt: `Create practice problems similar to this: ${extractedText}`
+    })
+    
+    return actions
+  }
+
+  const handleAskAI = () => {
+    if (!extractedText) return
+    setShowActionOptions(true)
+    setSelectedAction(null)
+  }
+
+  const generateTutorResponse = async (action: TutorAction) => {
+    if (!extractedText || !action) return
+    
+    setIsGeneratingTutorResponse(true)
+    setSelectedAction(action)
+    setShowActionOptions(false)
+    
+    try {
+      console.log('🤖 Generating tutor response for action:', action.title)
+      
+      // Navigate to tutor page with the specific action prompt
+      const tutorUrl = `/tutor?new=true&message=${encodeURIComponent(action.prompt)}`
+      router.push(tutorUrl)
+      
+    } catch (error) {
+      console.error('❌ Tutor response generation failed:', error)
+      setIsGeneratingTutorResponse(false)
+    }
+  }
+
+  const handleReset = () => {
+    setUploadedImage(null)
+    setProcessedImage(null)
+    setExtractedText('')
+    setTutorResponse(null)
+    setShowActionOptions(false)
+    setSelectedAction(null)
+  }
+
+  return (
+    <PremiumBackground>
+      <div className="relative min-h-screen pb-32">
+        {/* Unified Loading Overlay */}
+        {isProcessing && <LoadingScreen message="Analyzing document..." />}
+        {isGeneratingTutorResponse && <LoadingScreen message="Creating tutor explanation..." />}
+
+        {/* Camera Overlay */}
+        {isCameraActive && (
+          <div className="fixed inset-0 z-[150] bg-background flex flex-col">
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              className="flex-1 object-cover"
+            />
+            <div className="absolute bottom-10 left-0 right-0 flex items-center justify-between px-10 pb-env-safe">
+              <button
+                onClick={stopCamera}
+                className="w-14 h-14 rounded-full bg-white/10 backdrop-blur-md border border-white/20 flex items-center justify-center text-white"
+              >
+                <X className="w-6 h-6" />
+              </button>
+
+              <button
+                onClick={capturePhoto}
+                className="w-20 h-20 rounded-full border-4 border-white flex items-center justify-center p-1 bg-transparent group"
+              >
+                <div className="w-full h-full bg-white rounded-full group-active:scale-90 transition-transform" />
+              </button>
+
+              <div className="w-14 h-14" /> {/* Spacer */}
+            </div>
+            {/* Added bottom safe area padding for capture controls */}
+            <div className="h-20" />
+            <canvas ref={canvasRef} className="hidden" />
+          </div>
+        )}
+
+        {/* Header */}
+        <div className="sticky top-0 z-50 bg-background/40 backdrop-blur-2xl border-b border-white/5 px-4 py-3">
+          <div className="max-w-6xl mx-auto flex items-center justify-between">
+            <div className="flex flex-col">
+              <div className="flex items-center gap-2">
+                <span className="text-white font-bold tracking-tight">Smart Scanner</span>
+                <TierBadge size="sm" showText={false} className="h-5" />
+              </div>
+              <span className="text-[10px] uppercase tracking-widest font-bold text-white/40">
+                AI Sight Enabled
+              </span>
+            </div>
+            {uploadedImage && (
+              <button
+                onClick={handleReset}
+                className="p-2.5 rounded-xl bg-white/5 border border-white/10 text-white/50 hover:text-white transition-all"
+              >
+                <RefreshCw className="w-5 h-5" />
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="max-w-4xl mx-auto px-6 py-10">
+          {!uploadedImage ? (
+            <div className="space-y-12">
+              <div className="text-center">
+                <div className="inline-flex items-center justify-center w-24 h-24 bg-white/5 backdrop-blur-2xl rounded-[2.5rem] mb-8 border border-white/10 shadow-2xl">
+                  <Camera className="w-12 h-12 text-white" />
+                </div>
+                <h2 className="text-4xl font-extrabold text-gray-900 dark:text-white mb-4 tracking-tight">
+                  Scan and Learn.
+                </h2>
+                <p className="text-lg text-gray-600 dark:text-white/40 max-w-lg mx-auto leading-relaxed">
+                  Capture any document, problem, or handwritten note and let AI transform it into knowledge.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                <button
+                  onClick={startCamera}
+                  className="group relative h-64 bg-white/5 backdrop-blur-3xl rounded-[2.5rem] border border-white/10 hover:border-white/20 transition-all duration-500 overflow-hidden flex flex-col items-center justify-center gap-4 text-white shadow-2xl"
+                >
+                  <div className="w-16 h-16 rounded-2xl bg-white text-black flex items-center justify-center shadow-xl group-hover:scale-110 transition-transform">
+                    <Camera className="w-8 h-8" />
+                  </div>
+                  <div className="text-center">
+                    <span className="block text-xl font-bold text-gray-900 dark:text-white">Use Camera</span>
+                    <span className="text-sm text-gray-600 dark:text-white/40">Snap a photo now</span>
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="group relative h-64 bg-white/5 backdrop-blur-3xl rounded-[2.5rem] border border-white/10 hover:border-white/20 transition-all duration-500 overflow-hidden flex flex-col items-center justify-center gap-4 text-white shadow-2xl"
+                >
+                  <div className="w-16 h-16 rounded-2xl bg-white/10 border border-white/20 flex items-center justify-center shadow-xl group-hover:scale-110 transition-transform">
+                    <Upload className="w-8 h-8" />
+                  </div>
+                  <div className="text-center">
+                    <span className="block text-xl font-bold text-gray-900 dark:text-white">Upload File</span>
+                    <span className="text-sm text-gray-600 dark:text-white/40">PNG, JPG, PDF</span>
+                  </div>
+                </button>
+              </div>
+
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handleFileUpload}
+                className="hidden"
+              />
+            </div>
+          ) : (
+            <div className="space-y-8 animate-fade-in">
+              <div className="bg-white/5 backdrop-blur-3xl rounded-[2.5rem] border border-white/10 p-4 shadow-2xl">
+                <div className="relative aspect-auto max-h-[60vh] rounded-3xl overflow-hidden border border-white/10 bg-surface/40">
+                  <img
+                    src={processedImage || uploadedImage}
+                    alt="Scanned content"
+                    className="w-full h-full object-contain"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                <button
+                  onClick={handleClearDigitalScan}
+                  className="flex flex-col items-center justify-center gap-3 p-6 rounded-3xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all text-white group shadow-xl"
+                >
+                  <Wand2 className="w-6 h-6 group-hover:scale-110 transition-transform" />
+                  <span className="font-bold text-sm">Enhance</span>
+                </button>
+
+                <button
+                  onClick={handleExtractText}
+                  className="flex flex-col items-center justify-center gap-3 p-6 rounded-3xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all text-white group shadow-xl"
+                >
+                  <FileText className="w-6 h-6 group-hover:scale-110 transition-transform" />
+                  <span className="font-bold text-sm">Extract</span>
+                </button>
+
+                <button
+                  onClick={handleAskAI}
+                  disabled={!extractedText || isGeneratingTutorResponse}
+                  className="col-span-2 sm:col-span-1 flex flex-col items-center justify-center gap-3 p-6 rounded-3xl bg-white text-black hover:bg-white/90 transition-all group shadow-xl shadow-white/5 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Brain className="w-6 h-6 group-hover:scale-110 transition-transform fill-current" />
+                  <span className="font-bold text-sm">
+                    {isGeneratingTutorResponse ? 'Creating Explanation...' : 'Ask AI'}
+                  </span>
+                </button>
+              </div>
+
+              {/* Action Selection Modal */}
+              {showActionOptions && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+                  <div className="bg-white dark:bg-gray-900 rounded-3xl p-6 max-w-2xl w-full max-h-[80vh] overflow-y-auto shadow-2xl border border-white/20">
+                    <div className="flex items-center justify-between mb-6">
+                      <h3 className="text-2xl font-bold text-gray-900 dark:text-white">What would you like help with?</h3>
+                      <button
+                        onClick={() => setShowActionOptions(false)}
+                        className="p-2 rounded-xl bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                      >
+                        <X className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                      </button>
+                    </div>
+                    
+                    <div className="grid gap-4">
+                      {getTutorActions().map((action) => (
+                        <button
+                          key={action.id}
+                          onClick={() => generateTutorResponse(action)}
+                          className="flex items-center gap-4 p-4 rounded-2xl bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 transition-all group border border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-600"
+                        >
+                          <div className="text-2xl">{action.icon}</div>
+                          <div className="flex-1 text-left">
+                            <h4 className="font-semibold text-gray-900 dark:text-white mb-1">{action.title}</h4>
+                            <p className="text-sm text-gray-600 dark:text-gray-400">{action.description}</p>
+                          </div>
+                          <ArrowRight className="w-5 h-5 text-gray-400 group-hover:text-blue-500 transition-colors" />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {tutorResponse && (
+                <div className="bg-white/5 backdrop-blur-3xl rounded-[2rem] border border-white/10 p-8 shadow-2xl animate-slide-up">
+                  <div className="flex items-center justify-between mb-8">
+                    <div className="flex items-center gap-3">
+                      <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center shadow-lg">
+                        <Brain className="w-6 h-6 text-white" />
+                      </div>
+                      <div>
+                        <h3 className="text-2xl font-bold text-white tracking-tight">Tutor Explanation</h3>
+                        <p className="text-sm text-white/60">Personalized learning breakdown</p>
+                      </div>
+                    </div>
+                    <button className="p-2.5 rounded-xl bg-white text-black hover:scale-105 transition-all">
+                      <Download className="w-5 h-5" />
+                    </button>
+                  </div>
+
+                  {/* What this is about */}
+                  <div className="mb-8">
+                    <h4 className="text-lg font-bold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
+                      <div className="w-2 h-2 bg-blue-400 rounded-full"></div>
+                      What This Is About
+                    </h4>
+                    <p className="text-lg text-gray-700 dark:text-white/80 leading-relaxed">
+                      {tutorResponse.whatThisIsAbout}
+                    </p>
+                  </div>
+
+                  {/* Step-by-step explanation */}
+                  <div className="mb-8">
+                    <h4 className="text-lg font-bold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
+                      <div className="w-2 h-2 bg-purple-400 rounded-full"></div>
+                      Step-by-Step Explanation
+                    </h4>
+                    <div className="bg-white/5 rounded-xl p-6 border border-white/10">
+                      <p className="text-lg text-gray-700 dark:text-white/80 leading-relaxed whitespace-pre-line">
+                        {tutorResponse.stepByStepExplanation}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Key concepts */}
+                  <div className="mb-8">
+                    <h4 className="text-lg font-bold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
+                      <div className="w-2 h-2 bg-green-400 rounded-full"></div>
+                      Key Concepts to Remember
+                    </h4>
+                    <div className="space-y-3">
+                      {tutorResponse.keyConcepts.map((concept, index) => (
+                        <div key={index} className="flex items-start gap-3 bg-white/5 rounded-lg p-4 border border-white/10">
+                          <div className="w-6 h-6 bg-gradient-to-br from-green-400 to-emerald-500 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+                            <span className="text-white text-xs font-bold">{index + 1}</span>
+                          </div>
+                          <p className="text-gray-700 dark:text-white/80 leading-relaxed">{concept}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Quick check question */}
+                  <div className="mb-8">
+                    <h4 className="text-lg font-bold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
+                      <div className="w-2 h-2 bg-orange-400 rounded-full"></div>
+                      Quick Check Question
+                    </h4>
+                    <div className="bg-gradient-to-r from-orange-500/20 to-red-500/20 rounded-xl p-6 border border-orange-400/30">
+                      <p className="text-lg text-gray-800 dark:text-white/90 leading-relaxed font-medium">
+                        {tutorResponse.quickCheckQuestion}
+                      </p>
+                    </div>
+                  </div>
+              )}
+
+              {/* Show extracted text if no tutor response yet */}
+              {extractedText && !tutorResponse && (
+                <div className="bg-white/5 backdrop-blur-3xl rounded-[2rem] border border-white/10 p-8 shadow-2xl animate-slide-up">
+                  <div className="flex items-center justify-between mb-6">
+                    <h3 className="text-xl font-bold text-gray-900 dark:text-white tracking-tight">Extracted Text</h3>
+                    <button className="p-2.5 rounded-xl bg-white text-black hover:scale-105 transition-all">
+                      <Download className="w-5 h-5" />
+                    </button>
+                  </div>
+                  <p className="text-lg text-gray-700 dark:text-white/70 leading-relaxed font-medium">
+                    {extractedText}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+      <BottomNavigation />
+    </PremiumBackground>
+  )
+}

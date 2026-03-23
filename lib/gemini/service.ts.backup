@@ -1,0 +1,371 @@
+/**
+ * Production-Grade Gemini Service
+ * Handles model selection, quota management, and error handling
+ */
+
+import { GoogleGenerativeAI } from '@google/generative-ai'
+import { ModelManager, getPrimaryModelForTier, type SubscriptionTier } from './models'
+import { loadGeminiConfig, getApiKeyForTier, validateGeminiConfig } from './config'
+import { checkQuota, recordUsage, estimateTokens } from './quota'
+import { Profile, TutorMode } from '@/types/database'
+
+// Initialize configuration
+const geminiConfig = loadGeminiConfig()
+validateGeminiConfig(geminiConfig)
+
+// Cache model managers per API key
+const modelManagers = new Map<string, ModelManager>()
+
+function getModelManager(apiKey: string): ModelManager {
+  if (!modelManagers.has(apiKey)) {
+    modelManagers.set(apiKey, new ModelManager(apiKey))
+  }
+  return modelManagers.get(apiKey)!
+}
+
+export interface TutorContext {
+  mode: TutorMode
+  subject?: string
+  profile?: Profile
+  conversationHistory?: Array<{ role: 'user' | 'model'; parts: string }>
+}
+
+export const getTutorPrompt = (context: TutorContext): string => {
+  const { mode, subject, profile } = context
+  
+  let basePrompt = `You are a patient tutor sitting next to a student. Sound like a real human, not an AI.
+
+CRITICAL TEACHING FLOW:
+1. If user greets you ("hi", "hello", etc.): Respond briefly and ask what they want to work on. Do NOT start teaching.
+2. Once user states a topic: Confirm it first, then ask preferred depth (simple/example/step-by-step).
+3. Explain ONE idea at a time in simple language.
+4. After each idea: Pause and check understanding with a question like "Does this make sense so far?"
+5. Never overload with information. One concept per response.
+
+PERSONALITY:
+- Use simple, conversational language
+- Be encouraging but calm
+- Avoid generic AI phrases
+- Sound like you're sitting next to them
+- Use "Nice question" or "That's common confusion" naturally
+
+VOICE MODE RULES:
+- Remove all emojis and decorative symbols
+- Don't read math formulas unless asked
+- Use natural pauses
+- Prioritize clarity over completeness
+
+`
+
+  // Add mode-specific instructions
+  switch (mode) {
+    case 'explain':
+      basePrompt += `MODE: Explain Mode
+- Confirm topic first
+- Ask if they want simple/example/step-by-step
+- Explain ONE concept at a time
+- Check understanding after each concept
+- Use simple analogies
+- Ask "Does this make sense?" regularly
+
+`
+      break
+    case 'practice':
+      basePrompt += `MODE: Practice Mode
+- Confirm what they want to practice
+- Ask if they want problems/walk-through/examples
+- Give ONE problem at a time
+- Guide step-by-step
+- Check understanding before continuing
+- Celebrate small wins naturally
+
+`
+      break
+    case 'quiz':
+      basePrompt += `MODE: Quiz Mode
+- Confirm quiz topic first
+- Ask quiz type (quick review/challenge/fun)
+- Create ONE relevant question at a time
+- Make it feel like practice, not a test
+- Explain answers clearly and encouragingly
+- Keep it low-pressure
+
+`
+      break
+  }
+
+  // Add personalization if available
+  if (profile?.display_name) {
+    basePrompt += `PERSONALIZATION:
+- Student's name: ${profile.display_name}
+- Use their name sparingly and naturally
+- Reference their learning style if relevant: ${profile.learning_style || 'unknown'}
+- Adapt to their age: ${profile.age || 'unknown'}
+
+`
+  }
+
+  if (subject) {
+    basePrompt += `CURRENT TOPIC: ${subject}
+
+`
+  }
+
+  basePrompt += `Remember: Sound like a real human tutor. Be patient, encouraging, and never overwhelming. One concept at a time.`
+
+  return basePrompt
+}
+- Break down concepts into clear, understandable steps
+- Use analogies and examples when helpful
+- Check for understanding by asking questions
+- If the student asks a question, guide them to discover the answer rather than stating it directly
+`
+      break
+    case 'practice':
+      basePrompt += `MODE: Practice Mode
+- Present practice problems or exercises
+- Guide the student through solving them step-by-step
+- Give hints when they're stuck, not full solutions
+- Celebrate correct steps and explain mistakes
+`
+      break
+    case 'quiz':
+      basePrompt += `MODE: Quiz Mode
+- Create appropriate quiz questions
+- Provide immediate feedback on answers
+- Explain why answers are correct or incorrect
+- Adjust difficulty based on performance
+`
+      break
+    case 'review':
+      basePrompt += `MODE: Review Mode
+- Help students review previously learned material
+- Use spaced repetition techniques
+- Identify knowledge gaps
+- Reinforce key concepts
+`
+      break
+  }
+
+  // Add subject-specific guidance
+  if (subject) {
+    basePrompt += `\nSUBJECT: ${subject}\n`
+    if (subject.toLowerCase() === 'math') {
+      basePrompt += `- Show step-by-step reasoning clearly
+- Break down complex problems into smaller parts
+- Emphasize understanding the process, not just the answer
+`
+    }
+  }
+
+  // Add personalization based on profile
+  if (profile) {
+    if (profile.learning_style) {
+      basePrompt += `\nLEARNING STYLE: ${profile.learning_style}\n`
+      switch (profile.learning_style) {
+        case 'step-by-step':
+          basePrompt += `- Provide detailed step-by-step explanations
+- Break everything into small, manageable pieces
+`
+          break
+        case 'more-examples':
+          basePrompt += `- Use multiple examples to illustrate concepts
+- Show variations of similar problems
+`
+          break
+        case 'more-practice':
+          basePrompt += `- Focus on practice opportunities
+- Provide additional exercises when appropriate
+`
+          break
+      }
+    }
+
+    if (profile.grade_level) {
+      basePrompt += `\nGRADE LEVEL: ${profile.grade_level}\n`
+      basePrompt += `- Adjust your language and examples to be age-appropriate
+- Use concepts and terminology appropriate for this grade level
+`
+    }
+  }
+
+  basePrompt += `\nRemember: Your goal is to help students learn and understand, not to do their work for them. Always guide, never just give answers.`
+
+  return basePrompt
+}
+
+/**
+ * Generate tutor response with automatic model selection based on tier
+ */
+export async function generateTutorResponse(
+  userMessage: string,
+  context: TutorContext,
+  tier: SubscriptionTier = 'free'
+): Promise<string> {
+  const apiKey = getApiKeyForTier(geminiConfig, tier)
+  if (!apiKey) {
+    throw new Error(`No API key available for tier: ${tier}`)
+  }
+
+  // Check quota before making request
+  const estimatedTokens = estimateTokens(userMessage + getTutorPrompt(context))
+  const quotaCheck = checkQuota(apiKey, tier, estimatedTokens)
+  if (!quotaCheck.allowed) {
+    throw new Error(quotaCheck.reason || 'Quota exceeded')
+  }
+
+  const modelManager = getModelManager(apiKey)
+  const { model, config } = await modelManager.createModelForTier(tier)
+
+  const systemPrompt = getTutorPrompt(context)
+  const history = context.conversationHistory || []
+
+  try {
+    // Try startChat if model supports it
+    if (config.supportsChat) {
+      try {
+        const chat = model.startChat({
+          history: [
+            {
+              role: 'user',
+              parts: [{ text: systemPrompt }],
+            },
+            {
+              role: 'model',
+              parts: [{ text: 'I understand. I\'m ready to help you learn! What would you like to explore today?' }],
+            },
+            ...history.map(msg => ({
+              role: msg.role === 'user' ? 'user' : 'model',
+              parts: [{ text: msg.parts }],
+            })),
+          ],
+        })
+
+        const result = await chat.sendMessage(userMessage)
+        const response = await result.response
+        const text = response.text()
+
+        // Record usage
+        const tokensUsed = estimateTokens(userMessage + text)
+        recordUsage(apiKey, tokensUsed)
+
+        return text
+      } catch (chatError: any) {
+        console.warn(`Chat mode failed for ${config.name}, trying generateContent:`, chatError?.message)
+        // Fall through to generateContent
+      }
+    }
+
+    // Use generateContent as fallback or primary method
+    const fullPrompt = `${systemPrompt}\n\nUser message: ${userMessage}`
+    const result = await model.generateContent(fullPrompt)
+    const response = await result.response
+    const text = response.text()
+
+    // Record usage
+    const tokensUsed = estimateTokens(fullPrompt + text)
+    recordUsage(apiKey, tokensUsed)
+
+    return text
+  } catch (error: any) {
+    console.error(`GEMINI ERROR [${config.name}]:`, error)
+    
+    // If model-specific error, try fallback model
+    if (error.message?.includes('not found') || error.message?.includes('404')) {
+      console.warn(`Model ${config.name} not available, trying fallback`)
+      const fallbackConfig = getPrimaryModelForTier('free') // Always available
+      if (fallbackConfig.name !== config.name) {
+        try {
+          const fallbackModel = new GoogleGenerativeAI(apiKey).getGenerativeModel({
+            model: fallbackConfig.name,
+          })
+          const fullPrompt = `${systemPrompt}\n\nUser message: ${userMessage}`
+          const result = await fallbackModel.generateContent(fullPrompt)
+          const response = await result.response
+          return response.text()
+        } catch (fallbackError) {
+          console.error('Fallback model also failed:', fallbackError)
+        }
+      }
+    }
+    
+    throw error
+  }
+}
+
+/**
+ * Generate hint with automatic model selection
+ */
+export async function generateHint(
+  question: string,
+  context: TutorContext,
+  tier: SubscriptionTier = 'free'
+): Promise<string> {
+  const apiKey = getApiKeyForTier(geminiConfig, tier)
+  if (!apiKey) {
+    throw new Error(`No API key available for tier: ${tier}`)
+  }
+
+  // Check quota
+  const estimatedTokens = estimateTokens(question)
+  const quotaCheck = checkQuota(apiKey, tier, estimatedTokens)
+  if (!quotaCheck.allowed) {
+    throw new Error(quotaCheck.reason || 'Quota exceeded')
+  }
+
+  const modelManager = getModelManager(apiKey)
+  const { model, config } = await modelManager.createModelForTier(tier)
+
+  const prompt = `The student is working on this question/problem: "${question}"
+
+Give them a helpful hint that guides their thinking without giving away the answer. The hint should:
+- Point them in the right direction
+- Help them think about the problem differently
+- Not reveal the solution
+
+Provide only the hint, nothing else.`
+
+  try {
+    const result = await model.generateContent(prompt)
+    const response = await result.response
+    const text = response.text()
+
+    // Record usage
+    const tokensUsed = estimateTokens(prompt + text)
+    recordUsage(apiKey, tokensUsed)
+
+    return text
+  } catch (error: any) {
+    console.error(`GEMINI ERROR [${config.name}]:`, error)
+    throw error
+  }
+}
+
+/**
+ * Initialize and verify model availability on startup
+ */
+export async function initializeGeminiService(): Promise<void> {
+  console.log('Initializing Gemini service...')
+  
+  const tiers: SubscriptionTier[] = ['free', 'pro', 'master']
+  
+  for (const tier of tiers) {
+    try {
+      const apiKey = getApiKeyForTier(geminiConfig, tier)
+      if (!apiKey) {
+        console.warn(`No API key configured for tier: ${tier}`)
+        continue
+      }
+
+      const modelManager = getModelManager(apiKey)
+      const modelConfig = await modelManager.getModelForTier(tier)
+      
+      console.log(`✓ Tier ${tier}: Using model ${modelConfig.name} (${modelConfig.displayName})`)
+    } catch (error: any) {
+      console.error(`✗ Failed to initialize model for tier ${tier}:`, error.message)
+    }
+  }
+  
+  console.log('Gemini service initialized')
+}
+

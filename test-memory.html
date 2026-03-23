@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>brAIny Conversation Memory Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .message {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+        }
+        .user {
+            background: #e3f2fd;
+            text-align: right;
+        }
+        .assistant {
+            background: #f3e5f5;
+        }
+        button {
+            background: #1976d2;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #1565c0;
+        }
+        input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        .debug {
+            background: #f5f5f5;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <h1>🧪 brAIny Conversation Memory Test</h1>
+    
+    <div class="container">
+        <h2>Test Conversation Memory</h2>
+        <p>This will test if the AI remembers previous messages in a conversation.</p>
+        
+        <div>
+            <input type="text" id="messageInput" placeholder="Type your message here..." />
+            <button onclick="sendMessage()">Send Message</button>
+            <button onclick="startNewChat()">Start New Chat</button>
+            <button onclick="clearDebug()">Clear Debug</button>
+        </div>
+        
+        <div id="chatContainer"></div>
+        
+        <div class="container">
+            <h3>Debug Info</h3>
+            <div id="debugInfo" class="debug">Debug information will appear here...</div>
+        </div>
+    </div>
+
+    <script>
+        let currentChatId = null;
+        let messageCount = 0;
+        
+        function log(message) {
+            const debug = document.getElementById('debugInfo');
+            debug.textContent += new Date().toLocaleTimeString() + ': ' + message + '\n';
+            debug.scrollTop = debug.scrollHeight;
+        }
+        
+        function clearDebug() {
+            document.getElementById('debugInfo').textContent = '';
+        }
+        
+        function startNewChat() {
+            currentChatId = 'test-chat-' + Date.now();
+            messageCount = 0;
+            document.getElementById('chatContainer').innerHTML = '';
+            log('Started new chat with ID: ' + currentChatId);
+        }
+        
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            
+            if (!message) {
+                alert('Please enter a message');
+                return;
+            }
+            
+            if (!currentChatId) {
+                startNewChat();
+            }
+            
+            // Add user message to chat
+            addMessage('user', message);
+            input.value = '';
+            
+            try {
+                log('Sending message to API...');
+                log('Chat ID: ' + currentChatId);
+                log('Message: ' + message);
+                
+                const response = await fetch('/api/tutor', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        message: message,
+                        chatId: currentChatId,
+                        mode: 'explain',
+                        displayName: 'Test Student',
+                        profile: {
+                            display_name: 'Test Student',
+                            interests: ['science', 'testing']
+                        }
+                    })
+                });
+                
+                log('Response status: ' + response.status);
+                
+                if (!response.ok) {
+                    const error = await response.text();
+                    log('Error: ' + error);
+                    addMessage('assistant', 'Error: ' + error);
+                    return;
+                }
+                
+                const data = await response.json();
+                log('Got response from AI');
+                log('Response length: ' + data.response.length);
+                
+                // Check for continuity indicators
+                const continuityIndicators = [
+                    'previously', 'earlier', 'building on', 'as mentioned',
+                    'following up', 'continuing', 'photosynthesis', 'light-dependent',
+                    'calvin cycle', 'stomata', 'chlorophyll'
+                ];
+                
+                const hasContinuity = continuityIndicators.some(indicator => 
+                    data.response.toLowerCase().includes(indicator)
+                );
+                
+                log('Continuity check: ' + (hasContinuity ? '✅ FOUND' : '❌ NOT FOUND'));
+                
+                addMessage('assistant', data.response);
+                
+                messageCount++;
+                log('Message count: ' + messageCount);
+                
+            } catch (error) {
+                log('Network error: ' + error.message);
+                addMessage('assistant', 'Network error: ' + error.message);
+            }
+        }
+        
+        function addMessage(role, content) {
+            const container = document.getElementById('chatContainer');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message ' + role;
+            messageDiv.innerHTML = '<strong>' + role.toUpperCase() + ':</strong> ' + content;
+            container.appendChild(messageDiv);
+            container.scrollTop = container.scrollHeight;
+        }
+        
+        // Initialize
+        log('Test page loaded. Ready to test conversation memory.');
+        log('Note: This will show authentication errors if not logged in, but will still test the API structure.');
+    </script>
+</body>
+</html>
